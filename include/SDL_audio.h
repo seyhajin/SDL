@@ -214,9 +214,12 @@ typedef void (SDLCALL * SDL_AudioFilter) (struct SDL_AudioCVT * cvt,
  *  set both its (buf) field to a pointer that is aligned to 16 bytes, and its
  *  (len) field to something that's a multiple of 16, if possible.
  */
-#ifdef __GNUC__
+#if defined(__GNUC__) && !defined(__CHERI_PURE_CAPABILITY__)
 /* This structure is 84 bytes on 32-bit architectures, make sure GCC doesn't
    pad it out to 88 bytes to guarantee ABI compatibility between compilers.
+   This is not a concern on CHERI architectures, where pointers must be stored
+   at aligned locations otherwise they will become invalid, and thus structs
+   containing pointers cannot be packed without giving a warning or error.
    vvv
    The next time we rev the ABI, make sure to size the ints and add padding.
 */
@@ -458,57 +461,6 @@ extern DECLSPEC int SDLCALL SDL_GetAudioDeviceSpec(int index,
  * some drivers allow arbitrary and driver-specific strings, such as a
  * hostname/IP address for a remote audio server, or a filename in the
  * diskaudio driver.
- *
- * When filling in the desired audio spec structure:
- *
- * - `desired->freq` should be the frequency in sample-frames-per-second (Hz).
- * - `desired->format` should be the audio format (`AUDIO_S16SYS`, etc).
- * - `desired->samples` is the desired size of the audio buffer, in _sample
- *   frames_ (with stereo output, two samples--left and right--would make a
- *   single sample frame). This number should be a power of two, and may be
- *   adjusted by the audio driver to a value more suitable for the hardware.
- *   Good values seem to range between 512 and 8096 inclusive, depending on
- *   the application and CPU speed. Smaller values reduce latency, but can
- *   lead to underflow if the application is doing heavy processing and cannot
- *   fill the audio buffer in time. Note that the number of sample frames is
- *   directly related to time by the following formula: `ms =
- *   (sampleframes*1000)/freq`
- * - `desired->size` is the size in _bytes_ of the audio buffer, and is
- *   calculated by SDL_OpenAudioDevice(). You don't initialize this.
- * - `desired->silence` is the value used to set the buffer to silence, and is
- *   calculated by SDL_OpenAudioDevice(). You don't initialize this.
- * - `desired->callback` should be set to a function that will be called when
- *   the audio device is ready for more data. It is passed a pointer to the
- *   audio buffer, and the length in bytes of the audio buffer. This function
- *   usually runs in a separate thread, and so you should protect data
- *   structures that it accesses by calling SDL_LockAudioDevice() and
- *   SDL_UnlockAudioDevice() in your code. Alternately, you may pass a NULL
- *   pointer here, and call SDL_QueueAudio() with some frequency, to queue
- *   more audio samples to be played (or for capture devices, call
- *   SDL_DequeueAudio() with some frequency, to obtain audio samples).
- * - `desired->userdata` is passed as the first parameter to your callback
- *   function. If you passed a NULL callback, this value is ignored.
- *
- * `allowed_changes` can have the following flags OR'd together:
- *
- * - `SDL_AUDIO_ALLOW_FREQUENCY_CHANGE`
- * - `SDL_AUDIO_ALLOW_FORMAT_CHANGE`
- * - `SDL_AUDIO_ALLOW_CHANNELS_CHANGE`
- * - `SDL_AUDIO_ALLOW_ANY_CHANGE`
- *
- * These flags specify how SDL should behave when a device cannot offer a
- * specific feature. If the application requests a feature that the hardware
- * doesn't offer, SDL will always try to get the closest equivalent.
- *
- * For example, if you ask for float32 audio format, but the sound card only
- * supports int16, SDL will set the hardware to int16. If you had set
- * SDL_AUDIO_ALLOW_FORMAT_CHANGE, SDL will change the format in the `obtained`
- * structure. If that flag was *not* set, SDL will prepare to convert your
- * callback's float32 audio to int16 before feeding it to the hardware and
- * will keep the originally requested format in the `obtained` structure.
- *
- * If your application can only handle one specific data format, pass a zero
- * for `allowed_changes` and let SDL transparently handle any differences.
  *
  * An opened audio device starts out paused, and should be enabled for playing
  * by calling SDL_PauseAudioDevice(devid, 0) when you are ready for your audio
@@ -1148,6 +1100,27 @@ extern DECLSPEC void SDLCALL SDL_UnlockAudioDevice(SDL_AudioDeviceID dev);
  * \sa SDL_OpenAudio
  */
 extern DECLSPEC void SDLCALL SDL_CloseAudio(void);
+
+/**
+ * Use this function to shut down audio processing and close the audio device.
+ *
+ * The application should close open audio devices once they are no longer
+ * needed. Calling this function will wait until the device's audio callback
+ * is not running, release the audio hardware and then clean up internal
+ * state. No further audio will play from this device once this function
+ * returns.
+ *
+ * This function may block briefly while pending audio data is played by the
+ * hardware, so that applications don't drop the last buffer of data they
+ * supplied.
+ *
+ * The device ID is invalid as soon as the device is closed, and is eligible
+ * for reuse in a new SDL_OpenAudioDevice() call immediately.
+ *
+ * \param dev an audio device previously opened with SDL_OpenAudioDevice()
+ *
+ * \sa SDL_OpenAudioDevice
+ */
 extern DECLSPEC void SDLCALL SDL_CloseAudioDevice(SDL_AudioDeviceID dev);
 
 /* Ends C function definitions when using C++ */

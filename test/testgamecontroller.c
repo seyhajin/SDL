@@ -156,14 +156,14 @@ static void AddController(int device_index, SDL_bool verbose)
 
     if (SDL_GameControllerHasSensor(gamecontroller, SDL_SENSOR_ACCEL)) {
         if (verbose) {
-            SDL_Log("Enabling accelerometer\n");
+            SDL_Log("Enabling accelerometer at %.2f Hz\n", SDL_GameControllerGetSensorDataRate(gamecontroller, SDL_SENSOR_ACCEL));
         }
         SDL_GameControllerSetSensorEnabled(gamecontroller, SDL_SENSOR_ACCEL, SDL_TRUE);
     }
 
     if (SDL_GameControllerHasSensor(gamecontroller, SDL_SENSOR_GYRO)) {
         if (verbose) {
-            SDL_Log("Enabling gyro\n");
+            SDL_Log("Enabling gyro at %.2f Hz\n", SDL_GameControllerGetSensorDataRate(gamecontroller, SDL_SENSOR_GYRO));
         }
         SDL_GameControllerSetSensorEnabled(gamecontroller, SDL_SENSOR_GYRO, SDL_TRUE);
     }
@@ -305,7 +305,11 @@ loop(void *arg)
     int i;
     SDL_bool showing_front = SDL_TRUE;
 
-    while (SDL_PollEvent(&event)) {
+    /* Update to get the current event state */
+    SDL_PumpEvents();
+
+    /* Process all currently pending events */
+    while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT) == 1) {
         switch (event.type) {
         case SDL_CONTROLLERDEVICEADDED:
             SDL_Log("Game controller device %d added.\n", (int) SDL_JoystickGetDeviceInstanceID(event.cdevice.which));
@@ -514,6 +518,7 @@ main(int argc, char *argv[])
     char guid[64];
 
     SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_JOY_CONS, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS4_RUMBLE, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_PS5_RUMBLE, "1");
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");

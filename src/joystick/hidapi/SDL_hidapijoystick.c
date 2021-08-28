@@ -47,18 +47,18 @@
 #include <IOKit/usb/USBSpec.h>
 #endif
 
-#if defined(__LINUX__)
 #include "../../core/linux/SDL_udev.h"
 #ifdef SDL_USE_LIBUDEV
 #include <poll.h>
+#include <unistd.h>
 #endif
+
 #ifdef HAVE_INOTIFY
+#include <unistd.h>  /* just in case we didn't use that SDL_USE_LIBUDEV block... */
 #include <errno.h>              /* errno, strerror */
 #include <fcntl.h>
 #include <limits.h>             /* For the definition of NAME_MAX */
 #include <sys/inotify.h>
-#endif
-#include <unistd.h>
 #endif
 
 #if defined(SDL_USE_LIBUDEV)
@@ -1111,6 +1111,40 @@ HIDAPI_IsEquivalentToDevice(Uint16 vendor_id, Uint16 product_id, SDL_HIDAPI_Devi
 }
 
 SDL_bool
+HIDAPI_IsDeviceTypePresent(SDL_GameControllerType type)
+{
+    SDL_HIDAPI_Device *device;
+    SDL_bool result = SDL_FALSE;
+
+    /* Make sure we're initialized, as this could be called from other drivers during startup */
+    if (HIDAPI_JoystickInit() < 0) {
+        return SDL_FALSE;
+    }
+
+    if (SDL_AtomicTryLock(&SDL_HIDAPI_spinlock)) {
+        HIDAPI_UpdateDeviceList();
+        SDL_AtomicUnlock(&SDL_HIDAPI_spinlock);
+    }
+
+    SDL_LockJoysticks();
+    device = SDL_HIDAPI_devices;
+    while (device) {
+        if (device->driver &&
+            SDL_GetJoystickGameControllerType(device->name, device->vendor_id, device->product_id, device->interface_number, device->interface_class, device->interface_subclass, device->interface_protocol) == type) {
+            result = SDL_TRUE;
+            break;
+        }
+        device = device->next;
+    }
+    SDL_UnlockJoysticks();
+
+#ifdef DEBUG_HIDAPI
+    SDL_Log("HIDAPI_IsDeviceTypePresent() returning %s for %d\n", result ? "true" : "false", type);
+#endif
+    return result;
+}
+
+SDL_bool
 HIDAPI_IsDevicePresent(Uint16 vendor_id, Uint16 product_id, Uint16 version, const char *name)
 {
     SDL_HIDAPI_Device *device;
@@ -1152,6 +1186,7 @@ HIDAPI_IsDevicePresent(Uint16 vendor_id, Uint16 product_id, Uint16 version, cons
         if (device->driver &&
             HIDAPI_IsEquivalentToDevice(vendor_id, product_id, device)) {
             result = SDL_TRUE;
+            break;
         }
         device = device->next;
     }

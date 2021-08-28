@@ -187,14 +187,6 @@ ShouldUseTextureFramebuffer()
         return SDL_FALSE;
     }
 
-    /* If the user has specified a software renderer we can't use a
-       texture framebuffer, or renderer creation will go recursive.
-     */
-    hint = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
-    if (hint && SDL_strcasecmp(hint, "software") == 0) {
-        return SDL_FALSE;
-    }
-
     /* See if the user or application wants a specific behavior */
     hint = SDL_GetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION);
     if (hint) {
@@ -492,17 +484,27 @@ SDL_VideoInit(const char *driver_name)
     }
 
     /* Select the proper video driver */
-    index = 0;
+    i = index = 0;
     video = NULL;
     if (driver_name == NULL) {
         driver_name = SDL_getenv("SDL_VIDEODRIVER");
     }
     if (driver_name != NULL) {
-        for (i = 0; bootstrap[i]; ++i) {
-            if (SDL_strncasecmp(bootstrap[i]->name, driver_name, SDL_strlen(driver_name)) == 0) {
-                video = bootstrap[i]->create(index);
-                break;
+        const char *driver_attempt = driver_name;
+        while(driver_attempt != NULL && *driver_attempt != 0 && video == NULL) {
+            const char* driver_attempt_end = SDL_strchr(driver_attempt, ',');
+            size_t driver_attempt_len = (driver_attempt_end != NULL) ? (driver_attempt_end - driver_attempt)
+                                                                     : SDL_strlen(driver_attempt);
+
+            for (i = 0; bootstrap[i]; ++i) {
+                if ((driver_attempt_len == SDL_strlen(bootstrap[i]->name)) &&
+                    (SDL_strncasecmp(bootstrap[i]->name, driver_attempt, driver_attempt_len) == 0)) {
+                    video = bootstrap[i]->create(index);
+                    break;
+                }
             }
+
+            driver_attempt = (driver_attempt_end != NULL) ? (driver_attempt_end + 1) : NULL;
         }
     } else {
         for (i = 0; bootstrap[i]; ++i) {
@@ -1153,7 +1155,16 @@ SDL_SetWindowDisplayMode(SDL_Window * window, const SDL_DisplayMode * mode)
     if (FULLSCREEN_VISIBLE(window) && (window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) != SDL_WINDOW_FULLSCREEN_DESKTOP) {
         SDL_DisplayMode fullscreen_mode;
         if (SDL_GetWindowDisplayMode(window, &fullscreen_mode) == 0) {
-            SDL_SetDisplayModeForDisplay(SDL_GetDisplayForWindow(window), &fullscreen_mode);
+            if (SDL_SetDisplayModeForDisplay(SDL_GetDisplayForWindow(window), &fullscreen_mode) == 0) {
+#ifndef ANDROID
+                /* Android may not resize the window to exactly what our fullscreen mode is, especially on
+                 * windowed Android environments like the Chromebook or Samsung DeX.  Given this, we shouldn't
+                 * use fullscreen_mode.w and fullscreen_mode.h, but rather get our current native size.  As such,
+                 * Android's SetWindowFullscreen will generate the window event for us with the proper final size.
+                 */
+                SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED, fullscreen_mode.w, fullscreen_mode.h);
+#endif
+            }
         }
     }
     return 0;
@@ -1349,11 +1360,11 @@ SDL_UpdateFullscreenMode(SDL_Window * window, SDL_bool fullscreen)
                 /* Generate a mode change event here */
                 if (resized) {
 #ifndef ANDROID
-                    // Android may not resize the window to exactly what our fullscreen mode is, especially on
-                    // windowed Android environments like the Chromebook or Samsung DeX.  Given this, we shouldn't
-                    // use fullscreen_mode.w and fullscreen_mode.h, but rather get our current native size.  As such,
-                    // Android's SetWindowFullscreen will generate the window event for us with the proper final size.
-
+                    /* Android may not resize the window to exactly what our fullscreen mode is, especially on
+                     * windowed Android environments like the Chromebook or Samsung DeX.  Given this, we shouldn't
+                     * use fullscreen_mode.w and fullscreen_mode.h, but rather get our current native size.  As such,
+                     * Android's SetWindowFullscreen will generate the window event for us with the proper final size.
+                     */
                     SDL_SendWindowEvent(other, SDL_WINDOWEVENT_RESIZED,
                                         fullscreen_mode.w, fullscreen_mode.h);
 #endif
@@ -1589,6 +1600,22 @@ SDL_CreateWindow(const char *title, int x, int y, int w, int h, Uint32 flags)
         displayIndex = SDL_GetIndexOfDisplay(display);
         SDL_GetDisplayBounds(displayIndex, &bounds);
 
+        /* for real fullscreen we might switch the resolution, so get width and height
+         * from closest supported mode and use that instead of current resolution
+         */
+        if ((flags & SDL_WINDOW_FULLSCREEN_DESKTOP) != SDL_WINDOW_FULLSCREEN_DESKTOP
+              && (bounds.w != w || bounds.h != h)) {
+            SDL_DisplayMode fullscreen_mode, closest_mode;
+            SDL_zero(fullscreen_mode);
+            fullscreen_mode.w = w;
+            fullscreen_mode.h = h;
+            if (SDL_GetClosestDisplayModeForDisplay(display, &fullscreen_mode, &closest_mode) != NULL) {
+                bounds.w = closest_mode.w;
+                bounds.h = closest_mode.h;
+            }
+        }
+        window->fullscreen_mode.w = bounds.w;
+        window->fullscreen_mode.h = bounds.h;
         window->x = bounds.x;
         window->y = bounds.y;
         window->w = bounds.w;
@@ -2760,11 +2787,7 @@ SDL_SetWindowMouseGrab(SDL_Window * window, SDL_bool grabbed)
 SDL_bool
 SDL_GetWindowGrab(SDL_Window * window)
 {
-    CHECK_WINDOW_MAGIC(window, SDL_FALSE);
-    SDL_assert(!_this->grabbed_window ||
-               ((_this->grabbed_window->flags & SDL_WINDOW_MOUSE_GRABBED) != 0) ||
-               ((_this->grabbed_window->flags & SDL_WINDOW_KEYBOARD_GRABBED) != 0));
-    return window == _this->grabbed_window;
+    return (SDL_GetWindowKeyboardGrab(window) || SDL_GetWindowMouseGrab(window));
 }
 
 SDL_bool
@@ -2786,10 +2809,12 @@ SDL_GetWindowMouseGrab(SDL_Window * window)
 SDL_Window *
 SDL_GetGrabbedWindow(void)
 {
-    SDL_assert(!_this->grabbed_window ||
-               ((_this->grabbed_window->flags & SDL_WINDOW_MOUSE_GRABBED) != 0) ||
-               ((_this->grabbed_window->flags & SDL_WINDOW_KEYBOARD_GRABBED) != 0));
-    return _this->grabbed_window;
+    if (_this->grabbed_window &&
+        (_this->grabbed_window->flags & (SDL_WINDOW_MOUSE_GRABBED|SDL_WINDOW_KEYBOARD_GRABBED)) != 0) {
+        return _this->grabbed_window;
+    } else {
+        return NULL;
+    }
 }
 
 int
@@ -2820,7 +2845,10 @@ void
 SDL_OnWindowResized(SDL_Window * window)
 {
     window->surface_valid = SDL_FALSE;
-    SDL_SendWindowEvent(window, SDL_WINDOWEVENT_SIZE_CHANGED, window->w, window->h);
+
+    if (!window->is_destroying) {
+        SDL_SendWindowEvent(window, SDL_WINDOWEVENT_SIZE_CHANGED, window->w, window->h);
+    }
 }
 
 void
@@ -2878,6 +2906,8 @@ SDL_OnWindowFocusGained(SDL_Window * window)
 static SDL_bool
 ShouldMinimizeOnFocusLoss(SDL_Window * window)
 {
+    const char *hint;
+
     if (!(window->flags & SDL_WINDOW_FULLSCREEN) || window->is_destroying) {
         return SDL_FALSE;
     }
@@ -2893,12 +2923,21 @@ ShouldMinimizeOnFocusLoss(SDL_Window * window)
 #ifdef __ANDROID__
     {
         extern SDL_bool Android_JNI_ShouldMinimizeOnFocusLoss(void);
-        if (! Android_JNI_ShouldMinimizeOnFocusLoss()) {
+        if (!Android_JNI_ShouldMinimizeOnFocusLoss()) {
             return SDL_FALSE;
         }
     }
 #endif
 
+    /* Real fullscreen windows should minimize on focus loss so the desktop video mode is restored */
+    hint = SDL_GetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS);
+    if (!hint || !*hint || SDL_strcasecmp(hint, "auto") == 0) {
+        if ((window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP) {
+            return SDL_FALSE;
+        } else {
+            return SDL_TRUE;
+        }
+    }
     return SDL_GetHintBoolean(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, SDL_FALSE);
 }
 

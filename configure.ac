@@ -22,9 +22,9 @@ dnl Set various version strings - taken gratefully from the GTk sources
 #
 SDL_MAJOR_VERSION=2
 SDL_MINOR_VERSION=0
-SDL_MICRO_VERSION=15
-SDL_INTERFACE_AGE=1
-SDL_BINARY_AGE=15
+SDL_MICRO_VERSION=17
+SDL_INTERFACE_AGE=0
+SDL_BINARY_AGE=17
 SDL_VERSION=$SDL_MAJOR_VERSION.$SDL_MINOR_VERSION.$SDL_MICRO_VERSION
 
 AC_SUBST(SDL_MAJOR_VERSION)
@@ -80,6 +80,20 @@ case "$host" in
         INCLUDE="$INCLUDE -idirafter $srcdir/src/video/khronos"
         ;;
 esac
+
+dnl use CXX for linker on Haiku
+case "$host" in
+    *-*-haiku*)
+        LINKER='$(CXX)'
+        LIBTOOLLINKERTAG='CXX'
+        ;;
+    *)
+        LINKER='$(CC)'
+        LIBTOOLLINKERTAG='CC'
+        ;;
+esac
+AC_SUBST(LINKER)
+AC_SUBST(LIBTOOLLINKERTAG)
 
 if test x$srcdir != x.; then
     INCLUDE="-Iinclude $INCLUDE"
@@ -1541,7 +1555,7 @@ CheckWayland()
 [AS_HELP_STRING([--enable-wayland-shared], [dynamically load Wayland support [default=maybe]])],
                           , enable_wayland_shared=maybe)
 
-            dnl FIXME: Do BSD and OS X need special cases?
+dnl FIXME: Do BSD and OS X need special cases?
             case "$host" in
                 *)
                     wayland_client_lib=[`find_lib "libwayland-client.so.*" "$WAYLAND_LIBS" | sed 's/.*\/\(.*\)/\1/; q'`]
@@ -1584,6 +1598,45 @@ CheckWayland()
                 SUMMARY_video="${SUMMARY_video} wayland"
             fi
             have_video=yes
+
+dnl See if libdecor is available
+            AC_ARG_ENABLE(libdecor,
+[AS_HELP_STRING([--enable-libdecor], [use libdecor for Wayland client-side decorations [default=yes]])],
+                          , enable_libdecor=yes)
+            if test x$enable_libdecor = xyes; then
+                AC_MSG_CHECKING(for libdecor support)
+                AS_IF([$PKG_CONFIG --exists libdecor-0],
+                      [video_libdecor=yes],
+                      [video_libdecor=no])
+                AC_MSG_RESULT($video_libdecor)
+                if test x$video_libdecor = xyes; then
+                    EXTRA_CFLAGS="$EXTRA_CFLAGS `$PKG_CONFIG --cflags libdecor-0`"
+                    AC_DEFINE(HAVE_LIBDECOR_H, 1, [ ])
+
+                    AC_ARG_ENABLE(libdecor-shared,
+[AS_HELP_STRING([--enable-libdecor-shared], [dynamically load libdecor [default=yes]])],
+                         , enable_libdecor_shared=yes)
+
+                    if test x$enable_wayland_shared != xyes; then
+                       enable_libdecor_shared=no
+                    fi
+
+                    decor_lib=[`find_lib "libdecor-0.so.*" "" | sed 's/.*\/\(.*\)/\1/; q'`]
+
+                    if test x$have_loadso != xyes && \
+                       test x$enable_libdecor_shared = xyes; then
+                        AC_MSG_WARN([You must have SDL_LoadObject() support for dynamic libdecor loading])
+                    fi
+
+                    if test x$have_loadso = xyes && \
+                       test x$enable_libdecor_shared = xyes && test x$decor_lib != x; then
+                        echo "-- dynamic libdecor -> $decor_lib"
+                        AC_DEFINE_UNQUOTED(SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_LIBDECOR, "$decor_lib", [ ])
+                    else
+                        EXTRA_LDFLAGS="$EXTRA_LDFLAGS `$PKG_CONFIG --libs libdecor-0`"
+                    fi
+                fi
+            fi
         fi
     fi
 }
@@ -2545,6 +2598,10 @@ CheckVulkan()
             AC_MSG_WARN([Vulkan does not work on this configuration.])
         fi
     fi
+    if test x$have_loadso != xyes; then
+        AC_MSG_WARN([Vulkan support is available, but disabled because there's no loadso.])
+        enable_video_vulkan=no
+    fi
     if test x$enable_video_vulkan = xyes; then
         AC_DEFINE(SDL_VIDEO_VULKAN, 1, [ ])
         SUMMARY_video="${SUMMARY_video} vulkan"
@@ -3171,30 +3228,26 @@ XINPUT_STATE_EX s1;
 }
 
 dnl Check for the dlfcn.h interface for dynamically loading objects
+dnl NOTE: CheckDLOPEN is called only for relevant platforms
 CheckDLOPEN()
 {
-    AC_ARG_ENABLE(sdl-dlopen,
-[AS_HELP_STRING([--enable-sdl-dlopen], [use dlopen for shared object loading [default=yes]])],
-                  , enable_sdl_dlopen=yes)
-    if test x$enable_sdl_dlopen = xyes; then
-        AC_MSG_CHECKING(for dlopen)
-        have_dlopen=no
-        AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-         #include <dlfcn.h>
-        ]], [[
-         void *handle = dlopen("", RTLD_NOW);
-         const char *loaderror = (char *) dlerror();
-        ]])], [have_dlopen=yes],[])
-        AC_MSG_RESULT($have_dlopen)
+    AC_DEFINE(DYNAPI_NEEDS_DLOPEN,1,[])
 
-        if test x$have_dlopen = xyes; then
-            AC_CHECK_LIB(c, dlopen, EXTRA_LDFLAGS="$EXTRA_LDFLAGS",
-               AC_CHECK_LIB(dl, dlopen, EXTRA_LDFLAGS="$EXTRA_LDFLAGS -ldl",
-                  AC_CHECK_LIB(ltdl, dlopen, EXTRA_LDFLAGS="$EXTRA_LDFLAGS -lltdl")))
-            AC_DEFINE(SDL_LOADSO_DLOPEN, 1, [ ])
-            SOURCES="$SOURCES $srcdir/src/loadso/dlopen/*.c"
-            have_loadso=yes
-        fi
+    AC_CHECK_HEADER(dlfcn.h,have_dlfcn_h=yes,have_dlfcn_h=no)
+
+    have_dlopen=no
+    AC_CHECK_LIB(c, dlopen, have_dlopen=yes,
+       AC_CHECK_LIB(dl, dlopen, [have_dlopen=yes; EXTRA_LDFLAGS="$EXTRA_LDFLAGS -ldl"]))
+    AC_MSG_CHECKING(for dlopen)
+    AC_MSG_RESULT($have_dlopen)
+
+    if test x$have_dlfcn_h = xyes -a x$have_dlopen = xyes; then
+       AC_DEFINE(HAVE_DLOPEN,1,[])
+       if test x$enable_loadso = xyes; then
+          AC_DEFINE(SDL_LOADSO_DLOPEN,1,[])
+          SOURCES="$SOURCES $srcdir/src/loadso/dlopen/*.c"
+          have_loadso=yes
+       fi
     fi
 }
 
@@ -3611,6 +3664,15 @@ case "$host" in
                 AC_DEFINE(SDL_AUDIO_DRIVER_ANDROID, 1, [ ])
                 SOURCES="$SOURCES $srcdir/src/audio/android/*.c"
                 SUMMARY_audio="${SUMMARY_audio} android"
+
+                AC_DEFINE(SDL_AUDIO_DRIVER_OPENSLES, 1, [ ])
+                SOURCES="$SOURCES $srcdir/src/audio/openslES/*.c"
+                SUMMARY_audio="${SUMMARY_audio} openslES"
+
+                AC_DEFINE(SDL_AUDIO_DRIVER_AAUDIO, 1, [ ])
+                SOURCES="$SOURCES $srcdir/src/audio/aaudio/*.c"
+                SUMMARY_audio="${SUMMARY_audio} aaudio"
+
                 have_audio=yes
             ;;
             nto)
@@ -4333,6 +4395,7 @@ if test x$video_wayland = xyes; then
         printf '%s\n' "	\\$(RUN_CMD_GEN)\\$(WAYLAND_SCANNER) \\$(WAYLAND_SCANNER_CODE_MODE) \\$< \\$@" ;\
         echo ;\
         printf '%s\n' "\\$(objects)/\$p-protocol.lo: \\$(gen)/\$p-protocol.c \\$(gen)/\$p-client-protocol.h" ;\
+        printf '%s\n' "	@\\$(SHELL) \\$(auxdir)/mkinstalldirs \\$(objects)" ;\
         printf '%s\n' "	\\$(RUN_CMD_CC)\\$(LIBTOOL) --tag=CC --mode=compile \\$(CC) \\$(CFLAGS) \\$(EXTRA_CFLAGS) $DEPENDENCY_TRACKING_OPTIONS -c \\$< -o \\$@" ;\
         done ;\
         echo ;\

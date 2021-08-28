@@ -86,6 +86,8 @@ print_modifiers(char **text, size_t *maxlen)
         print_string(text, maxlen, " CAPS");
     if (mod & KMOD_MODE)
         print_string(text, maxlen, " MODE");
+    if (mod & KMOD_SCROLL)
+        print_string(text, maxlen, " SCROLL");
 }
 
 static void
@@ -199,6 +201,7 @@ int
 main(int argc, char *argv[])
 {
     SDL_Window *window;
+    SDL_Renderer *renderer;
 
     /* Enable standard application logging */
     SDL_LogSetPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO);
@@ -218,6 +221,12 @@ main(int argc, char *argv[])
                 SDL_GetError());
         quit(2);
     }
+
+    /* On wayland, no window will actually show until something has
+       actually been displayed.
+    */
+    renderer = SDL_CreateRenderer(window, -1, 0);
+    SDL_RenderPresent(renderer);
 
 #if __IPHONEOS__
     /* Creating the context creates the view, which we need to show keyboard */

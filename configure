@@ -690,6 +690,8 @@ ALSA_CFLAGS
 POW_LIB
 LIBOBJS
 ALLOCA
+LIBTOOLLINKERTAG
+LINKER
 PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
 PKG_CONFIG
@@ -861,6 +863,8 @@ enable_arm_neon
 enable_video_wayland
 enable_video_wayland_qt_touch
 enable_wayland_shared
+enable_libdecor
+enable_libdecor_shared
 enable_video_rpi
 enable_video_x11
 with_x
@@ -898,7 +902,6 @@ enable_pthread_sem
 enable_directx
 enable_xinput
 enable_wasapi
-enable_sdl_dlopen
 enable_hidapi
 enable_hidapi_libusb
 enable_clock_gettime
@@ -1640,6 +1643,10 @@ Optional Features:
                           QtWayland server support for Wayland video driver
                           [default=yes]
   --enable-wayland-shared dynamically load Wayland support [default=maybe]
+  --enable-libdecor       use libdecor for Wayland client-side decorations
+                          [default=yes]
+  --enable-libdecor-shared
+                          dynamically load libdecor [default=yes]
   --enable-video-rpi      use Raspberry Pi video driver [default=yes]
   --enable-video-x11      use X11 video driver [default=yes]
   --enable-x11-shared     dynamically load X11 support [default=maybe]
@@ -1688,7 +1695,6 @@ Optional Features:
   --enable-directx        use DirectX for Windows audio/video [default=yes]
   --enable-xinput         use Xinput for Windows [default=yes]
   --enable-wasapi         use the Windows WASAPI audio driver [default=yes]
-  --enable-sdl-dlopen     use dlopen for shared object loading [default=yes]
   --enable-hidapi         use HIDAPI for low level joystick drivers
                           [default=yes]
   --enable-hidapi-libusb  use libusb for low level joystick drivers
@@ -2832,9 +2838,9 @@ orig_CFLAGS="$CFLAGS"
 #
 SDL_MAJOR_VERSION=2
 SDL_MINOR_VERSION=0
-SDL_MICRO_VERSION=15
-SDL_INTERFACE_AGE=1
-SDL_BINARY_AGE=15
+SDL_MICRO_VERSION=17
+SDL_INTERFACE_AGE=0
+SDL_BINARY_AGE=17
 SDL_VERSION=$SDL_MAJOR_VERSION.$SDL_MINOR_VERSION.$SDL_MICRO_VERSION
 
 
@@ -16010,6 +16016,19 @@ case "$host" in
         ;;
 esac
 
+case "$host" in
+    *-*-haiku*)
+        LINKER='$(CXX)'
+        LIBTOOLLINKERTAG='CXX'
+        ;;
+    *)
+        LINKER='$(CC)'
+        LIBTOOLLINKERTAG='CC'
+        ;;
+esac
+
+
+
 if test x$srcdir != x.; then
     INCLUDE="-Iinclude $INCLUDE"
 elif test -d .git; then
@@ -19914,7 +19933,7 @@ else
 fi
 
 
-                        case "$host" in
+            case "$host" in
                 *)
                     wayland_client_lib=`find_lib "libwayland-client.so.*" "$WAYLAND_LIBS" | sed 's/.*\/\(.*\)/\1/; q'`
                     wayland_egl_lib=`find_lib "libwayland-egl.so.*" "$WAYLAND_LIBS" | sed 's/.*\/\(.*\)/\1/; q'`
@@ -19972,6 +19991,63 @@ _ACEOF
                 SUMMARY_video="${SUMMARY_video} wayland"
             fi
             have_video=yes
+
+            # Check whether --enable-libdecor was given.
+if test "${enable_libdecor+set}" = set; then :
+  enableval=$enable_libdecor;
+else
+  enable_libdecor=yes
+fi
+
+            if test x$enable_libdecor = xyes; then
+                { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libdecor support" >&5
+$as_echo_n "checking for libdecor support... " >&6; }
+                if $PKG_CONFIG --exists libdecor-0; then :
+  video_libdecor=yes
+else
+  video_libdecor=no
+fi
+                { $as_echo "$as_me:${as_lineno-$LINENO}: result: $video_libdecor" >&5
+$as_echo "$video_libdecor" >&6; }
+                if test x$video_libdecor = xyes; then
+                    EXTRA_CFLAGS="$EXTRA_CFLAGS `$PKG_CONFIG --cflags libdecor-0`"
+
+$as_echo "#define HAVE_LIBDECOR_H 1" >>confdefs.h
+
+
+                    # Check whether --enable-libdecor-shared was given.
+if test "${enable_libdecor_shared+set}" = set; then :
+  enableval=$enable_libdecor_shared;
+else
+  enable_libdecor_shared=yes
+fi
+
+
+                    if test x$enable_wayland_shared != xyes; then
+                       enable_libdecor_shared=no
+                    fi
+
+                    decor_lib=`find_lib "libdecor-0.so.*" "" | sed 's/.*\/\(.*\)/\1/; q'`
+
+                    if test x$have_loadso != xyes && \
+                       test x$enable_libdecor_shared = xyes; then
+                        { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: You must have SDL_LoadObject() support for dynamic libdecor loading" >&5
+$as_echo "$as_me: WARNING: You must have SDL_LoadObject() support for dynamic libdecor loading" >&2;}
+                    fi
+
+                    if test x$have_loadso = xyes && \
+                       test x$enable_libdecor_shared = xyes && test x$decor_lib != x; then
+                        echo "-- dynamic libdecor -> $decor_lib"
+
+cat >>confdefs.h <<_ACEOF
+#define SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC_LIBDECOR "$decor_lib"
+_ACEOF
+
+                    else
+                        EXTRA_LDFLAGS="$EXTRA_LDFLAGS `$PKG_CONFIG --libs libdecor-0`"
+                    fi
+                fi
+            fi
         fi
     fi
 }
@@ -22825,6 +22901,11 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 $as_echo "$as_me: WARNING: Vulkan does not work on this configuration." >&2;}
         fi
     fi
+    if test x$have_loadso != xyes; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: Vulkan support is available, but disabled because there's no loadso." >&5
+$as_echo "$as_me: WARNING: Vulkan support is available, but disabled because there's no loadso." >&2;}
+        enable_video_vulkan=no
+    fi
     if test x$enable_video_vulkan = xyes; then
 
 $as_echo "#define SDL_VIDEO_VULKAN 1" >>confdefs.h
@@ -24058,42 +24139,20 @@ fi
 
 CheckDLOPEN()
 {
-    # Check whether --enable-sdl-dlopen was given.
-if test "${enable_sdl_dlopen+set}" = set; then :
-  enableval=$enable_sdl_dlopen;
+    $as_echo "#define DYNAPI_NEEDS_DLOPEN 1" >>confdefs.h
+
+
+    ac_fn_c_check_header_mongrel "$LINENO" "dlfcn.h" "ac_cv_header_dlfcn_h" "$ac_includes_default"
+if test "x$ac_cv_header_dlfcn_h" = xyes; then :
+  have_dlfcn_h=yes
 else
-  enable_sdl_dlopen=yes
+  have_dlfcn_h=no
 fi
 
-    if test x$enable_sdl_dlopen = xyes; then
-        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen" >&5
-$as_echo_n "checking for dlopen... " >&6; }
-        have_dlopen=no
-        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
 
-         #include <dlfcn.h>
 
-int
-main ()
-{
-
-         void *handle = dlopen("", RTLD_NOW);
-         const char *loaderror = (char *) dlerror();
-
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  have_dlopen=yes
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-        { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_dlopen" >&5
-$as_echo "$have_dlopen" >&6; }
-
-        if test x$have_dlopen = xyes; then
-            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen in -lc" >&5
+    have_dlopen=no
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen in -lc" >&5
 $as_echo_n "checking for dlopen in -lc... " >&6; }
 if ${ac_cv_lib_c_dlopen+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -24130,7 +24189,7 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_dlopen" >&5
 $as_echo "$ac_cv_lib_c_dlopen" >&6; }
 if test "x$ac_cv_lib_c_dlopen" = xyes; then :
-  EXTRA_LDFLAGS="$EXTRA_LDFLAGS"
+  have_dlopen=yes
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen in -ldl" >&5
 $as_echo_n "checking for dlopen in -ldl... " >&6; }
@@ -24169,58 +24228,25 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_dl_dlopen" >&5
 $as_echo "$ac_cv_lib_dl_dlopen" >&6; }
 if test "x$ac_cv_lib_dl_dlopen" = xyes; then :
-  EXTRA_LDFLAGS="$EXTRA_LDFLAGS -ldl"
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen in -lltdl" >&5
-$as_echo_n "checking for dlopen in -lltdl... " >&6; }
-if ${ac_cv_lib_ltdl_dlopen+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lltdl  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char dlopen ();
-int
-main ()
-{
-return dlopen ();
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_ltdl_dlopen=yes
-else
-  ac_cv_lib_ltdl_dlopen=no
-fi
-rm -f core conftest.err conftest.$ac_objext \
-    conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ltdl_dlopen" >&5
-$as_echo "$ac_cv_lib_ltdl_dlopen" >&6; }
-if test "x$ac_cv_lib_ltdl_dlopen" = xyes; then :
-  EXTRA_LDFLAGS="$EXTRA_LDFLAGS -lltdl"
+  have_dlopen=yes; EXTRA_LDFLAGS="$EXTRA_LDFLAGS -ldl"
 fi
 
 fi
 
-fi
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dlopen" >&5
+$as_echo_n "checking for dlopen... " >&6; }
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_dlopen" >&5
+$as_echo "$have_dlopen" >&6; }
 
+    if test x$have_dlfcn_h = xyes -a x$have_dlopen = xyes; then
+       $as_echo "#define HAVE_DLOPEN 1" >>confdefs.h
 
-$as_echo "#define SDL_LOADSO_DLOPEN 1" >>confdefs.h
+       if test x$enable_loadso = xyes; then
+          $as_echo "#define SDL_LOADSO_DLOPEN 1" >>confdefs.h
 
-            SOURCES="$SOURCES $srcdir/src/loadso/dlopen/*.c"
-            have_loadso=yes
-        fi
+          SOURCES="$SOURCES $srcdir/src/loadso/dlopen/*.c"
+          have_loadso=yes
+       fi
     fi
 }
 
@@ -25004,6 +25030,19 @@ $as_echo "#define SDL_AUDIO_DRIVER_ANDROID 1" >>confdefs.h
 
                 SOURCES="$SOURCES $srcdir/src/audio/android/*.c"
                 SUMMARY_audio="${SUMMARY_audio} android"
+
+
+$as_echo "#define SDL_AUDIO_DRIVER_OPENSLES 1" >>confdefs.h
+
+                SOURCES="$SOURCES $srcdir/src/audio/openslES/*.c"
+                SUMMARY_audio="${SUMMARY_audio} openslES"
+
+
+$as_echo "#define SDL_AUDIO_DRIVER_AAUDIO 1" >>confdefs.h
+
+                SOURCES="$SOURCES $srcdir/src/audio/aaudio/*.c"
+                SUMMARY_audio="${SUMMARY_audio} aaudio"
+
                 have_audio=yes
             ;;
             nto)
@@ -25914,6 +25953,7 @@ if test x$video_wayland = xyes; then
         printf '%s\n' "	\\$(RUN_CMD_GEN)\\$(WAYLAND_SCANNER) \\$(WAYLAND_SCANNER_CODE_MODE) \\$< \\$@" ;\
         echo ;\
         printf '%s\n' "\\$(objects)/\$p-protocol.lo: \\$(gen)/\$p-protocol.c \\$(gen)/\$p-client-protocol.h" ;\
+        printf '%s\n' "	@\\$(SHELL) \\$(auxdir)/mkinstalldirs \\$(objects)" ;\
         printf '%s\n' "	\\$(RUN_CMD_CC)\\$(LIBTOOL) --tag=CC --mode=compile \\$(CC) \\$(CFLAGS) \\$(EXTRA_CFLAGS) $DEPENDENCY_TRACKING_OPTIONS -c \\$< -o \\$@" ;\
         done ;\
         echo ;\

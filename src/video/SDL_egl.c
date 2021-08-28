@@ -43,6 +43,11 @@
 #endif
 #endif /* EGL_KHR_create_context */
 
+#ifndef EGL_EXT_present_opaque
+#define EGL_EXT_present_opaque 1
+#define EGL_PRESENT_OPAQUE_EXT            0x31DF
+#endif /* EGL_EXT_present_opaque */
+
 #if SDL_VIDEO_DRIVER_RPI
 /* Raspbian places the OpenGL ES/EGL binaries in a non standard path */
 #define DEFAULT_EGL ( vc4 ? "libEGL.so.1" : "libbrcmEGL.so" )
@@ -507,12 +512,12 @@ SDL_EGL_LoadLibrary(_THIS, const char *egl_path, NativeDisplayType native_displa
         }
 
         if (_this->egl_data->eglGetPlatformDisplay) {
-            _this->egl_data->egl_display = _this->egl_data->eglGetPlatformDisplay(platform, (void *)(size_t)native_display, NULL);
+            _this->egl_data->egl_display = _this->egl_data->eglGetPlatformDisplay(platform, (void *)(uintptr_t)native_display, NULL);
         } else {
             if (SDL_EGL_HasExtension(_this, SDL_EGL_CLIENT_EXTENSION, "EGL_EXT_platform_base")) {
                 _this->egl_data->eglGetPlatformDisplayEXT = SDL_EGL_GetProcAddress(_this, "eglGetPlatformDisplayEXT");
                 if (_this->egl_data->eglGetPlatformDisplayEXT) {
-                    _this->egl_data->egl_display = _this->egl_data->eglGetPlatformDisplayEXT(platform, (void *)(size_t)native_display, NULL);
+                    _this->egl_data->egl_display = _this->egl_data->eglGetPlatformDisplayEXT(platform, (void *)(uintptr_t)native_display, NULL);
                 }
             }
         }
@@ -1182,8 +1187,8 @@ SDL_EGL_CreateSurface(_THIS, NativeWindowType nw)
     EGLint format_wanted;
     EGLint format_got;
 #endif
-    /* max 2 values plus terminator. */
-    EGLint attribs[3];
+    /* max 2 key+value pairs, plus terminator. */
+    EGLint attribs[5];
     int attr = 0;
 
     EGLSurface * surface;
@@ -1215,6 +1220,14 @@ SDL_EGL_CreateSurface(_THIS, NativeWindowType nw)
             return EGL_NO_SURFACE;
         }
     }
+
+#ifdef EGL_EXT_present_opaque
+    if (SDL_EGL_HasExtension(_this, SDL_EGL_DISPLAY_EXTENSION, "EGL_EXT_present_opaque")) {
+        const SDL_bool allow_transparent = SDL_GetHintBoolean(SDL_HINT_VIDEO_EGL_ALLOW_TRANSPARENCY, SDL_FALSE);
+        attribs[attr++] = EGL_PRESENT_OPAQUE_EXT;
+        attribs[attr++] = allow_transparent ? EGL_FALSE : EGL_TRUE;
+    }
+#endif
 
     attribs[attr++] = EGL_NONE;
     

@@ -711,8 +711,10 @@ extern "C" {
  *  \brief  A variable controlling whether the Home button LED should be turned on when a Nintendo Switch controller is opened
  *
  *  This variable can be set to the following values:
- *    "0"       - home button LED is left off
- *    "1"       - home button LED is turned on (the default)
+ *    "0"       - home button LED is turned off
+ *    "1"       - home button LED is turned on
+ *
+ *  By default the Home button LED state is not changed.
  */
 #define SDL_HINT_JOYSTICK_HIDAPI_SWITCH_HOME_LED "SDL_JOYSTICK_HIDAPI_SWITCH_HOME_LED"
 
@@ -1219,6 +1221,17 @@ extern "C" {
 #define SDL_HINT_VIDEO_DOUBLE_BUFFER      "SDL_VIDEO_DOUBLE_BUFFER"
 
 /**
+ * \brief A variable controlling whether the EGL window is allowed to be
+ * composited as transparent, rather than opaque.
+ *
+ * Most window systems will always render windows opaque, even if the surface
+ * format has an alpha channel. This is not always true, however, so by default
+ * SDL will try to enforce opaque composition. To override this behavior, you
+ * can set this hint to "1".
+ */
+#define SDL_HINT_VIDEO_EGL_ALLOW_TRANSPARENCY "SDL_VIDEO_EGL_ALLOW_TRANSPARENCY"
+
+/**
  * \brief A variable controlling whether the graphics context is externally managed.
  *
  * This variable can be set to the following values:
@@ -1264,6 +1277,17 @@ extern "C" {
  *
  */
 #define SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS   "SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS"
+
+/**
+ *  \brief  A variable controlling whether the libdecor Wayland backend is allowed to be used.
+ *
+ *  This variable can be set to the following values:
+ *    "0"       - libdecor use is disabled.
+ *    "1"       - libdecor use is enabled (default).
+ *
+ *  libdecor is used over xdg-shell when xdg-decoration protocol is unavailable.
+ */
+#define SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR "SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR"
 
 /**
 *  \brief  A variable that is the address of another SDL_Window* (as a hex string formatted with "%p").
@@ -1674,6 +1698,25 @@ extern "C" {
  *  The default value is "0".  This hint must be set before SDL_Init()
  */
 #define SDL_HINT_XINPUT_USE_OLD_JOYSTICK_MAPPING "SDL_XINPUT_USE_OLD_JOYSTICK_MAPPING"
+
+/**
+ *  \brief  A variable that causes SDL to not ignore audio "monitors"
+ *
+ *  This is currently only used for PulseAudio and ignored elsewhere.
+ *
+ *  By default, SDL ignores audio devices that aren't associated with physical
+ *  hardware. Changing this hint to "1" will expose anything SDL sees that
+ *  appears to be an audio source or sink. This will add "devices" to the list
+ *  that the user probably doesn't want or need, but it can be useful in
+ *  scenarios where you want to hook up SDL to some sort of virtual device,
+ *  etc.
+ *
+ *  The default value is "0".  This hint must be set before SDL_Init().
+ *
+ *  This hint is available since SDL 2.0.16. Before then, virtual devices are
+ *  always ignored.
+ */
+#define SDL_HINT_AUDIO_INCLUDE_MONITORS "SDL_AUDIO_INCLUDE_MONITORS"
 
 
 /**

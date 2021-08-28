@@ -1,5 +1,5 @@
 if(${CMAKE_CURRENT_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_BINARY_DIR})
-  message(FATAL_ERROR "Prevented in-tree built. Please create a build directory outside of the SDL source code and call cmake from there")
+  message(FATAL_ERROR "Prevented in-tree build. Please create a build directory outside of the SDL source code and run \"cmake -S ${CMAKE_SOURCE_DIR} -B .\" from there")
 endif()
 
 cmake_minimum_required(VERSION 3.0.0)
@@ -8,6 +8,10 @@ project(SDL2 C CXX)
 if(WINDOWS_STORE)
   cmake_minimum_required(VERSION 3.11)
   add_definitions(-DSDL_BUILDING_WINRT=1 -ZW)
+endif()
+
+if (HAIKU)
+  set(LINKER_LANGUAGE CXX)
 endif()
 
 # !!! FIXME: this should probably do "MACOSX_RPATH ON" as a target property
@@ -47,12 +51,12 @@ include(${SDL2_SOURCE_DIR}/cmake/sdlchecks.cmake)
 # set SDL_BINARY_AGE and SDL_INTERFACE_AGE to 0.
 set(SDL_MAJOR_VERSION 2)
 set(SDL_MINOR_VERSION 0)
-set(SDL_MICRO_VERSION 15)
-set(SDL_INTERFACE_AGE 1)
-set(SDL_BINARY_AGE 15)
+set(SDL_MICRO_VERSION 17)
+set(SDL_INTERFACE_AGE 0)
+set(SDL_BINARY_AGE 17)
 set(SDL_VERSION "${SDL_MAJOR_VERSION}.${SDL_MINOR_VERSION}.${SDL_MICRO_VERSION}")
 # the following should match the versions in Xcode project file:
-set(DYLIB_CURRENT_VERSION 15.1.0)
+set(DYLIB_CURRENT_VERSION 17.0.0)
 set(DYLIB_COMPATIBILITY_VERSION 1.0.0)
 
 # Set defaults preventing destination file conflicts
@@ -204,7 +208,7 @@ if(APPLE OR ARCH_64)
     set(OPT_DEF_SSEMATH ON)
   endif()
 endif()
-if(UNIX OR MINGW OR MSYS OR USE_CLANG OR VITA)
+if(UNIX OR MINGW OR MSYS OR (USE_CLANG AND NOT WINDOWS) OR VITA)
   set(OPT_DEF_LIBC ON)
 endif()
 
@@ -299,13 +303,11 @@ if(EMSCRIPTEN)
   set(SDL_ATOMIC_ENABLED_BY_DEFAULT OFF)
   set(SDL_LOADSO_ENABLED_BY_DEFAULT OFF)
   set(SDL_CPUINFO_ENABLED_BY_DEFAULT OFF)
-  set(SDL_DLOPEN_ENABLED_BY_DEFAULT OFF)
 endif()
 
 if(VITA)
   set(SDL_SHARED_ENABLED_BY_DEFAULT OFF)
   set(SDL_LOADSO_ENABLED_BY_DEFAULT OFF)
-  set(SDL_DLOPEN_ENABLED_BY_DEFAULT OFF)
 endif()
 
 # When defined, respect CMake's BUILD_SHARED_LIBS setting:
@@ -361,7 +363,6 @@ set_option(VIDEO_OPENGL        "Include OpenGL support" ON)
 set_option(VIDEO_OPENGLES      "Include OpenGL ES support" ON)
 set_option(PTHREADS            "Use POSIX threads for multi-threading" ${SDL_PTHREADS_ENABLED_BY_DEFAULT})
 dep_option(PTHREADS_SEM        "Use pthread semaphores" ON "PTHREADS" OFF)
-set_option(SDL_DLOPEN          "Use dlopen for shared object loading" ${SDL_DLOPEN_ENABLED_BY_DEFAULT})
 dep_option(OSS                 "Support the OSS audio API" ON "UNIX_SYS OR RISCOS" OFF)
 set_option(ALSA                "Support the ALSA audio API" ${UNIX_SYS})
 dep_option(ALSA_SHARED         "Dynamically load ALSA audio support" ON "ALSA" OFF)
@@ -388,6 +389,8 @@ set_option(CLOCK_GETTIME       "Use clock_gettime() instead of gettimeofday()" O
 set_option(VIDEO_X11           "Use X11 video driver" ${UNIX_SYS})
 set_option(VIDEO_WAYLAND       "Use Wayland video driver" ${UNIX_SYS})
 dep_option(WAYLAND_SHARED      "Dynamically load Wayland support" ON "VIDEO_WAYLAND" OFF)
+dep_option(WAYLAND_LIBDECOR    "Use client-side window decorations on Wayland" ON "VIDEO_WAYLAND" ON)
+dep_option(LIBDECOR_SHARED     "Dynamically load libdecor support" ON "WAYLAND_LIBDECOR" OFF)
 dep_option(VIDEO_WAYLAND_QT_TOUCH  "QtWayland server support for Wayland video driver" ON "VIDEO_WAYLAND" OFF)
 set_option(VIDEO_RPI           "Use Raspberry Pi video driver" ${UNIX_SYS})
 dep_option(X11_SHARED          "Dynamically load X11 support" ON "VIDEO_X11" OFF)
@@ -552,6 +555,15 @@ if(USE_GCC OR USE_CLANG)
     set(CMAKE_REQUIRED_FLAGS ${ORIG_CMAKE_REQUIRED_FLAGS})
     if(HAVE_NO_UNDEFINED AND NOT (USE_CLANG AND WINDOWS))
       list(APPEND EXTRA_LDFLAGS "-Wl,--no-undefined")
+    endif()
+  endif()
+
+  # Force color diagnostics when one of these conditions are met
+  if(DEFINED ENV{CI} OR DEFINED ENV{USE_CCACHE} OR CMAKE_GENERATOR MATCHES Ninja)
+    if(EMSCRIPTEN OR (USE_GCC AND NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 4.9))
+      list(APPEND EXTRA_CFLAGS -fdiagnostics-color=always)
+    elseif(USE_CLANG AND NOT CMAKE_C_COMPILER_ID MATCHES AppleClang)
+      list(APPEND EXTRA_CFLAGS -fcolor-diagnostics)
     endif()
   endif()
 endif()
@@ -920,11 +932,6 @@ if(SDL_HAPTIC)
 endif()
 
 
-# TODO: in configure.ac, the test for LOADSO and SDL_DLOPEN is a bit weird:
-# if LOADSO is not wanted, SDL_LOADSO_DISABLED is set
-# If however on Unix or APPLE dlopen() is detected via CheckDLOPEN(),
-# SDL_LOADSO_DISABLED will not be set, regardless of the LOADSO settings
-
 # General SDL subsystem options, valid for all platforms
 if(SDL_AUDIO)
   # CheckDummyAudio/CheckDiskAudio - valid for all platforms
@@ -942,10 +949,15 @@ if(SDL_AUDIO)
   endif()
 endif()
 
-if(SDL_DLOPEN)
+if(UNIX OR APPLE)
   # Relevant for Unix/Darwin only
-  if(UNIX OR APPLE)
-    CheckDLOPEN()
+  set(DYNAPI_NEEDS_DLOPEN 1)
+  CheckDLOPEN()
+  if(SDL_LOADSO AND HAVE_DLOPEN)
+    set(SDL_LOADSO_DLOPEN 1)
+    file(GLOB DLOPEN_SOURCES ${SDL2_SOURCE_DIR}/src/loadso/dlopen/*.c)
+    set(SOURCE_FILES ${SOURCE_FILES} ${DLOPEN_SOURCES})
+    set(HAVE_SDL_LOADSO TRUE)
   endif()
 endif()
 
@@ -1007,7 +1019,7 @@ if(ANDROID)
     find_library(ANDROID_OPENSLES_LIBRARY OpenSLES)
     list(APPEND EXTRA_LIBS ${ANDROID_DL_LIBRARY} ${ANDROID_OPENSLES_LIBRARY})
 
-    set(SDL_AUDIO_DRIVER_AAUDIO 0)
+    set(SDL_AUDIO_DRIVER_AAUDIO 1)
     file(GLOB AAUDIO_AUDIO_SOURCES ${SDL2_SOURCE_DIR}/src/audio/aaudio/*.c)
     set(SOURCE_FILES ${SOURCE_FILES} ${AAUDIO_AUDIO_SOURCES})
 
@@ -2246,6 +2258,11 @@ elseif(VITA)
 
 endif()
 
+if(VIDEO_VULKAN AND NOT SDL_LOADSO)
+  message(STATUS "Vulkan support is available, but disabled because there's no loadso.")
+  set(VIDEO_VULKAN OFF)
+endif()
+
 if(VIDEO_VULKAN)
   set(SDL_VIDEO_VULKAN 1)
   set(HAVE_VIDEO_VULKAN TRUE)
@@ -2347,9 +2364,9 @@ if(NOT WINDOWS OR CYGWIN OR MINGW)
   set(prefix ${CMAKE_INSTALL_PREFIX})
 
   set(exec_prefix "\${prefix}")
-  set(libdir "${CMAKE_INSTALL_LIBDIR}")
-  set(bindir "${CMAKE_INSTALL_BINDIR}")
-  set(includedir "${CMAKE_INSTALL_INCLUDEDIR}")
+  set(libdir "${CMAKE_INSTALL_FULL_LIBDIR}")
+  set(bindir "${CMAKE_INSTALL_FULL_BINDIR}")
+  set(includedir "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
   if(SDL_STATIC)
     set(ENABLE_STATIC_TRUE "")
     set(ENABLE_STATIC_FALSE "#")
@@ -2591,7 +2608,6 @@ if(SDL_SHARED)
   endif()
   if(IOS OR TVOS)
     set_property(TARGET SDL2 APPEND_STRING PROPERTY COMPILE_FLAGS "-fobjc-arc")
-    target_compile_definitions(SDL2 PRIVATE IOS_DYLIB=1)
   endif()
 endif()
 
@@ -2657,15 +2673,15 @@ endif()
 
 ##### Installation targets #####
 install(TARGETS ${_INSTALL_LIBS} EXPORT SDL2Targets
-  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}${LIB_SUFFIX}"
-  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}${LIB_SUFFIX}"
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+  ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 ##### Export files #####
 if (WINDOWS)
   set(PKG_PREFIX "cmake")
 else ()
-  set(PKG_PREFIX "${CMAKE_INSTALL_LIBDIR}${LIB_SUFFIX}/cmake/SDL2")
+  set(PKG_PREFIX "${CMAKE_INSTALL_LIBDIR}/cmake/SDL2")
 endif ()
 
 include(CMakePackageConfigHelpers)
@@ -2712,7 +2728,7 @@ if(NOT (WINDOWS OR CYGWIN OR MINGW))
           execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
             \"lib${SONAME}${SOPOSTFIX}${SOEXT}\" \"libSDL2${SOPOSTFIX}${SOEXT}\"
             WORKING_DIRECTORY \"${SDL2_BINARY_DIR}\")")
-        install(FILES ${SDL2_BINARY_DIR}/libSDL2${SOPOSTFIX}${SOEXT} DESTINATION "${CMAKE_INSTALL_LIBDIR}${LIB_SUFFIX}")
+        install(FILES ${SDL2_BINARY_DIR}/libSDL2${SOPOSTFIX}${SOEXT} DESTINATION "${CMAKE_INSTALL_LIBDIR}")
     endif()
   endif()
   if(FREEBSD)
@@ -2720,7 +2736,7 @@ if(NOT (WINDOWS OR CYGWIN OR MINGW))
     install(FILES ${SDL2_BINARY_DIR}/sdl2.pc DESTINATION "libdata/pkgconfig")
   else()
     install(FILES ${SDL2_BINARY_DIR}/sdl2.pc
-      DESTINATION "${CMAKE_INSTALL_LIBDIR}${LIB_SUFFIX}/pkgconfig")
+      DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
   endif()
   install(PROGRAMS ${SDL2_BINARY_DIR}/sdl2-config DESTINATION "${CMAKE_INSTALL_BINDIR}")
   # TODO: what about the .spec file? Is it only needed for RPM creation?
